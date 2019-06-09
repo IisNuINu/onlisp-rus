@@ -1,0 +1,631 @@
+@node 15 Macros Returning Functions, 16 Macro-Defining Macros, 14 Anaphoric Macros, Top
+@comment  node-name,  next,  previous,  up
+@chapter 15 Макосы возвращающие Функции
+@cindex 15 Macros Returning Functions
+
+В главе 5 показано, как писать функции, котоыре возвращают другие функции. Макрос
+упрощает задачу объединения операторов. Эта глава покажет, как использовать макросы
+для построения абстракций, эквивалентных тем, которые определены в главе 5, но
+яснее и  более эффективнее.
+
+@menu
+* 15-1 Building Functions::     
+* 15-2 Recursion on Cdrs::      
+* 15-3 Recursion on Subtrees::  
+* 15-4 Lazy Evaluation::        
+@end menu
+
+@node 15-1 Building Functions, 15-2 Recursion on Cdrs, 15 Macros Returning Functions, 15 Macros Returning Functions
+@comment  node-name,  next,  previous,  up
+@section 15-1 Построение Функций
+@cindex 15-1 Building Functions
+
+Если f и g являются функциями, тогда f ◦ g(x)=f (g(x)). Раздел 5-4 показал, как 
+реализовать оператор ◦ как функцию  Lisp называемую  compose:
+
+@example
+> (funcall (compose #'list #'1+) 2)
+(3)
+@end example
+
+В этом разделе, мы рассмотрим способы определения лучших компоновщиков(объединителей)
+функцийс помощью макросов. На рисунке 15-1 содержиться общий построитель функций 
+называемый fn, который создает составные функции из их описаний. Его аргументом
+должно быть выражение вида (operator . arguments). Оператор(operator) может быть
+именем функции или макроса или  compose, который рассматривается отдельно. Аргументами
+могут быть имена фунций или макросов от одного аргумента, или выражения которые могут
+быть аргументами для fn. Например,
+
+@lisp
+(fn (and integerp oddp))
+@end lisp
+
+@noindent
+дает функцию, эквивалентную
+
+@lisp
+#'(lambda (x) (and (integerp x) (oddp x)))
+@end lisp
+
+@cartouche
+@lisp
+ (defmacro fn (expr) `#',(rbuild expr))
+
+ (defun rbuild (expr)
+       (if (or (atom expr) (eq (car expr) 'lambda))
+            expr
+            (if (eq (car expr) 'compose)
+                 (build-compose (cdr expr))
+                 (build-call (car expr) (cdr expr)))))
+
+ (defun build-call (op fns)
+       (let ((g (gensym)))
+         `(lambda (,g)
+             (,op ,@@(mapcar #'(lambda (f)
+                                      `(,(rbuild f) ,g))
+                                 fns)))))
+
+ (defun build-compose (fns)
+       (let ((g (gensym)))
+         `(lambda (,g)
+             ,(labels ((rec (fns)
+                             (if fns
+                                  `(,(rbuild (car fns))
+                                     ,(rec (cdr fns)))
+                                  g)))
+                 (rec fns)))))
+@end lisp
+
+                    Рисунок 15-1: Макрос общий построитель функций.
+@end cartouche
+
+Если мы используем compose в качестве оператора, мы получаем функцию представляющую
+композицию аргументов, но без явных funcall, которые были бы необходимы, когда
+композиция(compose) была определена как функция. Например,
+
+@lisp
+(fn (compose list 1+ truncate))
+@end lisp
+
+@noindent
+расширяется в:
+
+@lisp
+#'(lambda (#:g1) (list (1+ (truncate #:g1))))
+@end lisp
+
+которая позволяет встроенную компиляцию простых функций, таких как list и 1+. 
+Макрос fn берет имена операторов в общем смысле; лямбда-выражения также разрешено
+использовать, как в
+
+@lisp
+(fn (compose (lambda (x) (+ x 3)) truncate))
+@end lisp
+
+@noindent
+которое расширяется в
+
+@lisp
+#'(lambda (#:g2) ((lambda (x) (+ x 3)) (truncate #:g2)))
+@end lisp
+
+Здесь функция выраженная как лямбда-выражение, обязательно будет скомпилирована
+встроенной в вызывающий контекст, в то время как квотированное с решеткой('#) 
+лямбда-выражение, переданное в качестве аргумента функции compose должна будет
+вызвана, посредством funcall.
+
+В разделе 5-4 показано, как определить еще три построителя функций: fif, fint,
+и fun. Теперь они включены в общий макрос fn. Использование and как оператора
+дает пересечение операторов, заданных в качестве аргументов:
+
+@example
+> (mapcar (fn (and integerp oddp))
+             '(c 3 p 0))
+(NIL T NIL NIL)
+@end example
+
+@noindent
+в то время как or дает их объединение:
+
+@example
+> (mapcar (fn (or integerp symbolp))
+             '(c 3 p 0-2))
+(T T T NIL)
+@end example
+
+@noindent
+и if возвращает функцию, тело которой является условным:
+
+@example
+> (map1-n (fn (if oddp 1+ identity)) 6)
+(224466)
+@end example
+
+Однако, мы можем использовать другие функции Lisp, кроме этих трех:
+
+@example
+> (mapcar (fn (list 1- identity 1+))
+             '(1 2 3))
+((012)(123)(234))
+@end example
+
+@noindent
+и аргументы в выражении fn сами могут быть выражениями:
+
+@example
+> (remove-if (fn (or (and integerp oddp)
+                                (and consp cdr)))
+                 '(1 (a b) c (d) 2 3-4 (e f g)))
+(C (D) 2 3-4)
+@end example
+
+Заставляя fn рассматривать compose как особый случай его более мощным.
+Если вы вложите аргументы в fn, вы получите функциональную композицию.
+Например,
+
+@lisp
+(fn (list (1+ truncate)))
+@end lisp
+
+@noindent
+расширяется в:
+
+@lisp
+#'(lambda (#:g1)
+         (list ((lambda (#:g2) (1+ (truncate #:g2))) #:g1)))
+@end lisp
+
+@noindent
+которая ведет себя как
+
+@lisp
+(compose #'list #'1+ #'truncate)
+@end lisp
+
+Макрос fn рассматривает compose как особый случай только для упрощения чтения таких
+вызовов.
+
+@node 15-2 Recursion on Cdrs, 15-3 Recursion on Subtrees, 15-1 Building Functions, 15 Macros Returning Functions
+@comment  node-name,  next,  previous,  up
+@section 15-2 Рекурсия по Cdrs(по окончанию списка)
+@cindex 15-2 Recursion on Cdrs
+
+В разделах 5-5 и 5-6 показано, как писать функции, которые создают рекурсивные функции.
+Следующие два раздела показывают как анафорические макросы могут обеспечить ясный
+интерфейс к функциям, которые мы там определили.
+
+В разделе 5-5 показано, как определить построитель рекурсеров для плоских списков
+с именем lrec. С lrec мы можем выразить вызов:
+
+@lisp
+(defun our-every (fn lst)
+     (if (null lst)
+           t(and (funcall fn (car lst))
+                 (our-every fn (cdr lst)))))
+@end lisp
+
+@noindent
+например для oddp как:
+
+@lisp
+(lrec #'(lambda (x f) (and (oddp x) (funcall f)))
+           t)
+@end lisp
+
+Здесь макросы могут облегчить жизнь. Сколько мы должны сказать, чтобы выразить
+рекурсивную функцию? Если мы можем обратиться анафорически к текущему началу(car)
+списка (как it) и рекурсивно вызвать (как rec), мы должны быть в состоянии
+обойтись, чем-то вроде:
+
+@lisp
+(alrec (and (oddp it) rec) t)
+@end lisp
+
+Рисунок 15-2 содержит определение макроса, который позволяет нам сказать это.
+
+@example
+> (funcall (alrec (and (oddp it) rec) t)
+                 '(1 3 5))
+T
+@end example
+
+@cartouche
+@lisp
+ (defmacro alrec (rec &optional base)
+    "cltl2 version"
+    (let ((gfn (gensym)))
+        `(lrec #'(lambda (it ,gfn)
+                     (symbol-macrolet ((rec (funcall ,gfn)))
+                        ,rec))
+                ,base)))
+
+ (defmacro alrec (rec &optional base)
+    "cltl1 version"
+    (let ((gfn (gensym)))
+        `(lrec #'(lambda (it ,gfn)
+                     (labels ((rec () (funcall ,gfn)))
+                        ,rec))
+                ,base)))
+
+ (defmacro on-cdrs (rec base &rest lsts)
+    `(funcall (alrec ,rec #'(lambda () ,base)) ,@@lsts))
+@end lisp
+
+                     Рисунок 15-2: Макросы для рекурсии по Списку.
+@end cartouche
+
+Новый макрос работает путем преобразования выражения переданного как второй
+аргумент в функцию для передачи в lrec. Поскольку второй аргумент может ссылаться
+анафорически на it или rec, в расширении макроса тело функции должно находиться 
+в области привязок, установленных для этих символов.
+
+На рисунке 15-2 фактически есть две разные версии alrec. Версии используемой в
+предыдущих примерах требуется символьные макросы (Раздел 7-11). Только последние
+версии Common Lisp имеют символьные макросы, поэтому Рисунок 15-2 также содержит
+чуть менее удобную версию alrec, в которой rec определена как локальная функция.
+Цена этого неудобства том, что как функция, rec должна быть заключена в скобки:
+
+@lisp
+(alrec (and (oddp it) (rec)) t)
+@end lisp
+
+Оригинальная версия предпочтительнее в реализациях Common Lisp, которые предоставляют
+symbol-macrolet.
+
+Common Lisp, с его отдельным пространство имепн для функций делает неудобным
+использование этих построителей рекурсий для определения именованных функций:
+
+@lisp
+(setf (symbol-function 'our-length)
+        (alrec (1+ rec) 0))
+@end lisp
+
+@cartouche
+@lisp
+ (defun our-copy-list (lst)
+       (on-cdrs (cons it rec) nil lst))
+
+ (defun our-remove-duplicates (lst)
+       (on-cdrs (adjoin it rec) nil lst))
+
+ (defun our-find-if (fn lst)
+       (on-cdrs (if (funcall fn it) it rec) nil lst))
+
+ (defun our-some (fn lst)
+       (on-cdrs (or (funcall fn it) rec) nil lst))
+@end lisp
+
+            Рисунок 15-3: Функции Common Lisp определенные с помощью on-cdrs.
+@end cartouche
+
+Последний макрос на Рисунке 15-2 предназначен для того, чтобы сделать это еще
+более абстрактным. С помощью on-cdrs мы могли бы вместо этого, сказать:
+
+@lisp
+(defun our-length (lst)
+  (on-cdrs (1+ rec) 0 lst))
+
+(defun our-every (fn lst)
+  (on-cdrs (and (funcall fn it) rec) t lst))
+@end lisp
+
+На Рисунке 15-3 показаны некоторые существующие функции Common Lisp определенные
+с помощью нового макроса. Выраженные с помощью on-cdrs, эти функции упрощены к
+самой общей форме, и мы замечаем сходство между ними, которые иначе не были бы
+очевидны.
+
+Рисунок 15-4 содержит некотоыре утилиты, которые можно легко определить с
+помощью on-cdrs. Первые три unions, intersections, и differences реализуют
+объединение, пересечение и дополнение множеств, соответственно. Common Lisp
+имеет встроенные функции для этих операций, но они могут принимать только
+два списка одновременно. Таким образом, если мы хотим найти объединение
+трех списков, мы должны сказать:
+
+@example
+> (union '(a b) (union '(b c) '(c d)))
+(A B C D)
+@end example
+
+Новое unions ведет себя также как union, но принимают произвольное количество
+аргументов, так что мы можем сказать:
+
+@example
+> (unions '(a b) '(b c) '(c d))
+(D C A B)
+@end example
+
+@cartouche
+@lisp
+ (defun unions (&rest sets)
+    (on-cdrs (union it rec) (car sets) (cdr sets)))
+
+ (defun intersections (&rest sets)
+    (unless (some #'null sets)
+         (on-cdrs (intersection it rec) (car sets) (cdr sets))))
+
+ (defun differences (set &rest outs)
+    (on-cdrs (set-difference rec it) set outs))
+
+ (defun maxmin (args)
+    (when args
+         (on-cdrs (multiple-value-bind (mx mn) rec
+                      (values (max mx it) (min mn it)))
+                   (values (car args) (car args))
+                   (cdr args))))
+@end lisp
+
+                Рисунок 15-4: Новые утилиты определенные с помощью on-cdrs.
+@end cartouche
+
+@noindent
+Подобно union, unions не сохраняет поряедок элементов в начальных списках.
+
+Тоже самое можно сказать в отношении между Common Lisp intersection и более
+общим intersections. В определении этой функции, для эффективности добавлена
+проверка на пустой аргумент; это приводит к более короткой схеме вычислений
+если одно из множеств является пустым.
+
+Common Lisp также имеет функцию называемую set-difference, которая принимает
+два списка и возвращает элементы первого, которых нет во втором:
+
+@example
+> (set-difference '(a b c d) '(a c))
+(D B)
+@end example
+
+Наша новая версия обрабатывает несколько аргументов также как и остальные.
+Нарпимер, (differences x y z) эквивалента (set-difference x (unions y z)),
+хотя без создания списка которое влечет за собой последнее выражение.
+
+@example
+> (differences '(a b c d e) '(a f) '(d))
+(BCE)
+@end example
+
+Эти операторы множеств предназначены только для примера. Там нет реальной необходимости
+в них, поскольку они представляют собой вырожденный случай рекурсии, уже обработанный 
+встроенной функцией reduce. Например, вместо
+
+@lisp
+(unions ...)
+@end lisp
+
+@noindent
+с таким же успехом можно сказать
+
+@lisp
+((lambda (&rest args) (reduce #'union args)) ...)
+@end lisp
+
+Однако в общем случае, on-cdrs является более мощным, чем reduce.
+
+Поскольку rec ссылается на вызвов вместо значения, мы можем использовать on-cdrs для
+создания функций, которые возвращают множественные значения. Последняя функция на 
+рисунке 15-4, maxmin, использует эту возможность, чтобы найти максимальный и минимальный
+элементы при единственном обходе списка:
+
+@example
+> (maxmin '(3 4 2 8 5 1 6 7))
+8
+1
+@end example
+
+Также было бы возможно испольовать on-cdrs в некотором коде, который появляется
+в последующих главах. Например, compile-cmds (стр. 310)
+
+@lisp
+(defun compile-cmds (cmds)
+      (if (null cmds)
+           'regs
+           `(,@@(car cmds) ,(compile-cmds (cdr cmds)))))
+@end lisp
+
+@noindent
+можно было бы определить просто:
+
+@lisp
+(defun compile-cmds (cmds)
+      (on-cdrs `(,@@it ,rec) 'regs cmds))
+@end lisp
+
+@node 15-3 Recursion on Subtrees, 15-4 Lazy Evaluation, 15-2 Recursion on Cdrs, 15 Macros Returning Functions
+@comment  node-name,  next,  previous,  up
+@section 15-3 Рекурсия на Поддеревьях
+@cindex 15-3 Recursion on Subtrees
+
+То что макросы делали для рекурсии на списках, они также могут делать для рекурсии
+на деревьях. В этом разделе, мы используем макросы для определения более ясных
+интерфейсов для рекурсеров по деревьям определенным в Разделе 5-6.
+
+В Разделе 5-6 мы определили два создателя рекурсии по деревьям, ttrav, который всегда
+проходит все дерево, и trec, который является более сложным, но позволяет контролировать,
+когда нужно остановить рекурсию. Используя эти функции мы можем выразить our-copy-tree
+
+@lisp
+(defun our-copy-tree (tree)
+      (if (atom tree)
+           tree
+           (cons (our-copy-tree (car tree))
+                    (if (cdr tree) (our-copy-tree (cdr tree))))))
+@end lisp
+
+@noindent
+как
+
+@lisp
+(ttrav #'cons)
+@end lisp
+
+@noindent
+и вызвов  rfind-if
+
+@lisp
+(defun rfind-if (fn tree)
+  (if (atom tree)
+        (and (funcall fn tree) tree)
+        (or (rfind-if fn (car tree))
+             (and (cdr tree) (rfind-if fn (cdr tree))))))
+@end lisp
+
+@noindent
+например для oddp как:
+
+@lisp
+(trec #'(lambda (o l r) (or (funcall l) (funcall r)))
+        #'(lambda (tree) (and (oddp tree) tree)))
+@end lisp
+
+Анафорические макросы могут улучшить интерфейс к trec, как это было сделано для lrec
+в предыдущем разделе. Макрос, достаточный для общего случая, должен быть в состоянии
+анафорически ссылаться на три вещи: текущее дерево, которое мы назовем it, рекурсию
+вниз по левому поддереву, которую мы назовем left, и на рекурсию вниз по правому
+поддереву, которую мы назовем right. Установив эти соглашения, мы будем в состоянии
+выразить предыдущие функции в терминах нового макроса следующим образом:
+
+@lisp
+(atrec (cons left right))
+
+(atrec (or left right) (and (oddp it) it))
+@end lisp
+
+Рисунок 15-5 содержит определение этого макроса.
+
+В весрисях Lisp которые не имеют symbol-macrolet, мы можем определить atrec
+используя второе определение на Рисунке 15-5. Эта версия определяет left и right
+как локальные функции, таким образом our-copy-tree может быть выражено как:
+
+@lisp
+(atrec (cons (left) (right)))
+@end lisp
+
+Для удобства, мы также определим макрос on-trees, который аналогичен on-cdrs 
+из предыдущего раздела. На Рисунке 15-6 показаны четыре функции из раздела  5-6 
+определенные с помощью on-trees.
+
+Как отмечено в Главе 5, функции созданные генератором рекурсеров, определенные
+в этой главе не будут иметь хвостовой рекурсии. Использование on-cdrs или on-trees
+для определения функций не обязательно даст наибольшую эффективную реализацию.
+Лежащие в основе trec и lrec, эти макросы в основном предназначены для использования
+в прототипах и в части программы, где эффективность не имеет первостепенного значения.
+Тем не менеее, основная идея этой главы и главы 5 заключается в том, что можно написать
+генераторы функций и предоставить ясный интерфейс в виде макросов для них. Эта же
+техника может быть одинаково хорошо использована для создания генераторов функций,
+которые создают действительно эффективный код.
+
+@cartouche
+@lisp
+ (defmacro atrec (rec &optional (base 'it))
+       "cltl2 version"
+       (let ((lfn (gensym)) (rfn (gensym)))
+        `(trec #'(lambda (it ,lfn ,rfn)
+                    (symbol-macrolet ((left (funcall ,lfn))
+                                            (right (funcall ,rfn)))
+                       ,rec))
+               #'(lambda (it) ,base))))
+
+ (defmacro atrec (rec &optional (base 'it))
+       "cltl1 version"
+       (let ((lfn (gensym)) (rfn (gensym)))
+        `(trec #'(lambda (it ,lfn ,rfn)
+                    (labels ((left () (funcall ,lfn))
+                                 (right () (funcall ,rfn)))
+                       ,rec))
+               #'(lambda (it) ,base))))
+
+ (defmacro on-trees (rec base &rest trees)
+       `(funcall (atrec ,rec ,base) ,@@trees))
+@end lisp
+
+                  Рисунок 15-5: Макросы для рекурсии на деревьях.
+@end cartouche
+
+@cartouche
+@lisp
+ (defun our-copy-tree (tree)
+       (on-trees (cons left right) it tree))
+
+ (defun count-leaves (tree)
+       (on-trees (+ left (or right 1)) 1 tree))
+
+ (defun flatten (tree)
+       (on-trees (nconc left right) (mklist it) tree))
+
+ (defun rfind-if (fn tree)
+       (on-trees (or left right)
+                (and (funcall fn it) it)
+                tree))
+@end lisp
+
+               Рисунок 15-6: Функции определенные с использованием on-trees.
+@end cartouche
+
+@cartouche
+@lisp
+ (defconstant unforced (gensym))
+
+ (defstruct delay forced closure)
+
+ (defmacro delay (expr)
+    (let ((self (gensym)))
+         `(let ((,self (make-delay :forced unforced)))
+            (setf (delay-closure ,self)
+                     #'(lambda ()
+                          (setf (delay-forced ,self) ,expr)))
+            ,self)))
+
+ (defun force (x)
+    (if (delay-p x)
+           (if (eq (delay-forced x) unforced)
+                  (funcall (delay-closure x))
+                  (delay-forced x))
+           x))
+@end lisp
+
+                  Рисунок 15-7: Реализация force и delay.
+@end cartouche
+
+@node 15-4 Lazy Evaluation,  , 15-3 Recursion on Subtrees, 15 Macros Returning Functions
+@comment  node-name,  next,  previous,  up
+@section 15-4 Ленивые вычисления
+@cindex 15-4 Lazy Evaluation
+
+Ленивые вычисления означают выполнение вычислений выражения только тогда, когда вам 
+нужно его значение. Один из способов использования ленивого(отложенного) вычисления
+является создание объекта известного как задержка(delay). delay это обещание выдать
+значение выражения, если оно необходимо в более позднее время. Между тем, так как
+promise(обещание) является объектом Lisp, оно может служить многим целям представляя
+его значение. И когда значение выражения понадобиться, delay может вернуть его
+Scheme имеет встроенную поддержку для задержек(delays). Оператор Scheme force и
+delay можно реализовать в  Common Lisp как показано на Рисунке 15-7. delay представлена
+как структура из двух частей. Первое поле указывает, была ли delay уже вычислена, и
+если это так, содержит его значение. Второе поле содержит замыкание, которое надо
+вызвать, чтобы найти значение, которое представляет delay. Макрос delay принимает
+выражение, и возвращает delay представляющую его значение:
+
+@example
+> (let ((x 2))
+        (setq d (delay (1+ x))))
+#S(DELAY ...)
+@end example
+
+Вызвать замыкание внутри delay значит форсировать задержку(force the delay). Функция 
+force берет любой объект: для обычных объектов это функция identity(ничего не делает, 
+а возвращает сам объект),но для задержек(delays) она требует значение, которое 
+эта delay представляет.
+
+@example
+> (force 'a)
+A> (force d)
+3
+@end example
+
+Мы используем force всякий раз, когда имеем дело с объектами, которые могут
+быть задержаны(быть delay). Например, если мы сортируем список, который 
+может содержать задержки(delay), мы должны сказть:
+
+@lisp
+(sort lst #'(lambda (x y) (> (force x) (force y))))
+@end lisp
+
+Немного не удобно использовать задержки(delay) в этой незащищенной форме. В реальном
+приложении они могут быть скрыты под другим слоем абстракции.

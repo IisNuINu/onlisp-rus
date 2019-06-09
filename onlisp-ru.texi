@@ -1,0 +1,33 @@
+\input texinfo
+@include russian.itexi
+@c -*-texinfo-*-
+@c %**start of header
+@setfilename onlisp-ru.info
+@documentencoding UTF-8
+
+@include  node-00.texi
+@include  node-01.texi
+@include  node-02.texi
+@include  node-03.texi
+@include  node-04.texi
+@include  node-05.texi
+@include  node-06.texi
+@include  node-07.texi
+@include  node-08.texi
+@include  node-09.texi
+@include  node-10.texi
+@include  node-11.texi
+@include  node-12.texi
+@include  node-13.texi
+@include  node-14.texi
+@include  node-15.texi
+@include  node-16.texi
+@include  node-17.texi
+@include  node-18.texi
+@include  node-19.texi
+@include  node-20.texi
+@include  node-21.texi
+@include  node-22.texi
+@include  node-23.texi
+@include  node-24.texi
+@include  node-25.texi
